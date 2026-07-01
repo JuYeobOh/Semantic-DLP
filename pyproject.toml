@@ -1,0 +1,24 @@
+[project]
+name = "final-dlp"
+version = "0.1.0"
+description = "Semantic DLP — 임베딩 기반 기밀문서 유출 탐지"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=18.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+allow-insecure-host = ["pypi.org", "files.pythonhosted.org"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sdlp"]

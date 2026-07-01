@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# 데이터/아티팩트/모델 용량 큼 — git 미추적
+data/
+artifacts/
+models/
+
+# tooling — .claude 는 skills만 추적
+.claude/*
+.claude/skills/
+.omc/
+.env
+*.egg-info/
+build/
+dist/
+
+CLAUDE.md
+PLAN.md
