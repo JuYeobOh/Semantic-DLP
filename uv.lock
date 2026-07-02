@@ -171,6 +171,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "scikit-learn" },
     { name = "sentence-transformers" },
     { name = "torch" },
 ]
@@ -186,6 +187,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pyarrow", specifier = ">=18.0" },
+    { name = "scikit-learn", specifier = ">=1.5" },
     { name = "sentence-transformers", specifier = ">=3.0" },
     { name = "torch", specifier = ">=2.7", index = "https://download.pytorch.org/whl/cu126" },
 ]

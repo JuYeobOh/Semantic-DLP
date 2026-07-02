@@ -11,6 +11,7 @@ dependencies = [
     "sentence-transformers>=3.0",
     "torch>=2.7",
     "faiss-cpu>=1.9",
+    "scikit-learn>=1.5",
 ]
 
 [dependency-groups]
