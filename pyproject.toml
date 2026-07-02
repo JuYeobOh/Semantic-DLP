@@ -10,6 +10,7 @@ dependencies = [
     "pyarrow>=18.0",
     "sentence-transformers>=3.0",
     "torch>=2.7",
+    "faiss-cpu>=1.9",
 ]
 
 [dependency-groups]
