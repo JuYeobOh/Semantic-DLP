@@ -8,13 +8,24 @@ dependencies = [
     "numpy>=2.0",
     "pandas>=2.2",
     "pyarrow>=18.0",
+    "sentence-transformers>=3.0",
+    "torch>=2.7",
 ]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
 [tool.uv]
-allow-insecure-host = ["pypi.org", "files.pythonhosted.org"]
+allow-insecure-host = ["pypi.org", "files.pythonhosted.org", "download.pytorch.org"]
+
+# PyTorch CUDA 12.6 wheel (driver 560.94 = CUDA 12.6, RTX 4080). 
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
