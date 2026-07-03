@@ -1,7 +1,9 @@
 """Re3-Sci 논문 리비전 데이터셋 → 정규 docs_df.
 
 소스: Re3-Sci_v1.zip 안의 docs/<paper_id>/v1.json, v2.json (nodes 구조).
-문서 텍스트 = KEEP 노드(article-title/abstract/title/p) content 를 순서대로 이어붙임.
+문서 텍스트 = KEEP 노드(article-title/abstract/title/p/list) content 를 순서대로 이어붙임.
+  - list 포함: 불릿 목록도 본문 내용이라 살림 (그래서 2026 parquet 과는 byte 불일치, re3 재기준).
+  - ref(서지)/fig/label 은 제외: 문서 고유 prose 만 남김.
 v1 = 원본(re3_v1_only), v2 = 리비전(re3_v2_only). 같은 논문이 한 family.
 """
 from __future__ import annotations
@@ -17,8 +19,8 @@ from sdlp.ids import build_doc_id, build_family_id, make_revision_doc_key
 from sdlp.io import save_prepared_set
 from sdlp.schemas import normalize_docs_df
 
-# 문서 텍스트에 포함할 노드 타입 (본문 구조만; ref/fig/table 등은 제외).
-KEEP_NTYPES = {"article-title", "abstract", "title", "p"}
+# 문서 텍스트에 포함할 노드 타입 (본문 구조 + 불릿 목록; ref/fig/label 은 제외).
+KEEP_NTYPES = {"article-title", "abstract", "title", "p", "list"}
 # zip 안의 문서 파일 경로 패턴: .../docs/<paper_id>/v<1|2>.json
 _DOC_RE = re.compile(r"/docs/([^/]+)/v([12])\.json$")
 
