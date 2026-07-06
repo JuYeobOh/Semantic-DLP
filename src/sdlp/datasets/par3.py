@@ -79,10 +79,11 @@ def _merge_volumes(data: dict) -> dict:
     return result
 
 
-# par3.pkl → (gt docs_df, human docs_df). 분권은 병합 후 처리.
-def build_par3_frames(pkl_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+# par3.pkl → (gt docs_df, human docs_df). merge_volumes=True 면 분권 병합, False 면 권 분리 유지.
+def build_par3_frames(pkl_path: str | Path, merge_volumes: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     with open(pkl_path, "rb") as f:
-        works = _merge_volumes(pickle.load(f))
+        data = pickle.load(f)
+    works = _merge_volumes(data) if merge_volumes else data
 
     gt_rows: list[dict] = []
     human_rows: list[dict] = []
@@ -123,10 +124,11 @@ def build_par3_frames(pkl_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]
     return normalize_docs_df(pd.DataFrame(gt_rows)), normalize_docs_df(pd.DataFrame(human_rows))
 
 
-# par3_gt / par3_human / par3_human_t1(translator_1만) 세트 저장.
+# 두 버전 저장: 병합(par3_gt/human/human_t1) + 분권분리(par3_*_split).
 def build_and_save_par3_prepared_sets(pkl_path: str | Path, prepared_dir: str | Path) -> None:
-    gt_df, human_df = build_par3_frames(pkl_path)
-    human_t1 = human_df[human_df["variant_level"] == "translator_1"].reset_index(drop=True)
-    save_prepared_set(gt_df, prepared_dir, "par3_gt")
-    save_prepared_set(human_df, prepared_dir, "par3_human")
-    save_prepared_set(human_t1, prepared_dir, "par3_human_t1")
+    for suffix, merge in (("", True), ("_split", False)):
+        gt_df, human_df = build_par3_frames(pkl_path, merge_volumes=merge)
+        human_t1 = human_df[human_df["variant_level"] == "translator_1"].reset_index(drop=True)
+        save_prepared_set(gt_df, prepared_dir, f"par3_gt{suffix}")
+        save_prepared_set(human_df, prepared_dir, f"par3_human{suffix}")
+        save_prepared_set(human_t1, prepared_dir, f"par3_human_t1{suffix}")

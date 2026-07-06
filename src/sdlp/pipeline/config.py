@@ -39,9 +39,8 @@ DATASET_DEFAULTS: dict[str, dict] = {
         "original_set": "casimir_v1_only_dedup",
         "variant_sets": ["casimir_latest_only_dedup"],
     },
-    "par3": {      # 기밀 DB=GoogleMT 전문. 기본 positive=사람 번역가 1번(translator_1)만.
-        # par3_human_t1 은 S9 datasets/par3 에서 translator_1 필터로 생성.
-        # "사람 전부" 버전은 RunConfig(dataset="par3", variant_sets=("par3_human",)) 로 override.
+    "par3": {      # 기밀 DB=GoogleMT 전문(분권 병합). 기본 positive=사람 번역가 1번(translator_1)만.
+        # override: "사람 전부"=variant_sets=("par3_human",) / 분권 분리=par3_gt_split·par3_human_t1_split
         "original_set": "par3_gt",
         "variant_sets": ["par3_human_t1"],
     },
