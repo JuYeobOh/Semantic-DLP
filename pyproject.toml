@@ -20,6 +20,9 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ipykernel>=6.29", "jupyter>=1.1"]
+dipper = [
+    "bitsandbytes>=0.43",
+]
 
 [tool.uv]
 allow-insecure-host = ["pypi.org", "files.pythonhosted.org", "download.pytorch.org"]
