@@ -3,7 +3,8 @@
 각 문서를 single 벡터로 인코딩 → query×ref cosine → 문서/family top-1.
 **confidence = best-family cosine**(raw; threshold sweep·AUC 로 평가). 이름을 confidence 로 둬야
 chunk_voting 과 동일한 evaluate_run/apply_threshold 경로에 drop-in 된다(값은 cosine).
-기본 모델: ibm-granite/granite-embedding-97m-multilingual-r2 (r2 context 8192).
+기본 모델: ibm-granite/granite-embedding-97m-multilingual-r2 (encoder bi-encoder, context 32768, dim 384, 경량).
+성능형 대안: ibm-granite/granite-embedding-311m-multilingual-r2 (dim 768, Matryoshka).
 
 max_seq_length 초과 문서 처리(long_doc):
   "truncate"  = head 절단(앞 N 토큰 보존, 뒤 유실) — 기존 방식
@@ -25,7 +26,7 @@ import pandas as pd
 from sdlp.detection.core import vote_entropy, vote_gini, vote_variance
 
 DEFAULT_MODEL = "ibm-granite/granite-embedding-97m-multilingual-r2"
-DEFAULT_MAX_SEQ = 8192   # granite r2 context
+DEFAULT_MAX_SEQ = 32768   # granite r2 context (97m/311m 모두 32k)
 LONG_DOC_MODES = ("truncate", "mean_pool", "exclude")
 
 # 프로세스 내 모델 재사용 (같은 설정이면 1회 로드).
