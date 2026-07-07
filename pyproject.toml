@@ -12,6 +12,7 @@ dependencies = [
     "torch>=2.7",
     "faiss-cpu>=1.9",
     "scikit-learn>=1.5",
+    "datasets>=5.0.0",
 ]
 
 [dependency-groups]
