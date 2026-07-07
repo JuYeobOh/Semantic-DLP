@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
-from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 
 from sdlp.detection.core import apply_threshold
 from sdlp.io import save_json
@@ -16,6 +16,22 @@ from sdlp.io import save_json
 # 0 나눗셈 방지 나눗셈.
 def _safe_div(a: float, b: float) -> float:
     return float(a) / float(b) if b else 0.0
+
+
+# confidence 임계값을 전수 스윕해 F1 최대인 지점(threshold·P·R·F1) 반환.
+# 임계값 무관 최적치 — 고정 0.5 F1 이 낮아도 분리도가 좋으면 여기서 높게 나온다. 양성·음성 둘 다 필요.
+def _best_f1_sweep(labels, scores) -> dict:
+    if not len(labels) or not (0 < labels.sum() < len(labels)):
+        return {"best_threshold": None, "best_f1": None, "best_precision": None, "best_recall": None}
+    precision, recall, thresholds = precision_recall_curve(labels, scores)
+    f1 = 2 * precision * recall / (precision + recall + 1e-12)   # 마지막 점(recall=0)은 threshold 없음 → 제외
+    i = int(f1[:-1].argmax()) if len(thresholds) else 0
+    return {
+        "best_threshold": float(thresholds[i]),
+        "best_f1": float(f1[i]),
+        "best_precision": float(precision[i]),
+        "best_recall": float(recall[i]),
+    }
 
 
 # 쿼리 정답표: positive 는 자기 family 가 정답(target), benign 은 정답 없음(None).
@@ -76,6 +92,8 @@ def evaluate_run(
             "tp": tp, "fp": fp, "tn": tn, "fn": fn,
             "precision": precision, "recall": recall, "f1": f1, "accuracy": accuracy,
         },
+        # 임계값 스윕 최적 F1 (고정 threshold 와 별도 — 분리도 기준 상한).
+        "detection_best": _best_f1_sweep(label, score),
         "attribution": {
             "family_acc_on_all_positive": attr_all,
             "family_acc_on_detected_positive": attr_detected,
