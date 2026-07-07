@@ -133,6 +133,10 @@ def _encode_set(set_name, docs_df, model_name, max_seq_length, batch_size, devic
     sub = docs_df[["doc_id", "family_id", "text"]].sort_values("doc_id").reset_index(drop=True)
     texts = [t if str(t).strip() else " " for t in sub["text"].fillna("").astype(str)]
 
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()   # 이전 인코딩의 예약메모리 반환 → 파편화로 인한 OOM 완화
+
     t0 = perf_counter()
     emb, kept_doc, kept_fam, n_overflow = _encode_docs(
         model, texts, sub["doc_id"].tolist(), sub["family_id"].tolist(),
