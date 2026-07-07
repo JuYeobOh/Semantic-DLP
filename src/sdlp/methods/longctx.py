@@ -48,6 +48,12 @@ def _get_encoder(model_name: str, max_seq_length: int, device: str | None, dtype
         return _MODEL_CACHE[key]
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    # 초장문(32k) attention 을 math 커널(N×N 행렬 materialize)로 돌리면 OOM →
+    # mem-efficient/flash SDPA 강제, math 끔. (짧은 문서엔 영향 없음.)
+    if torch.cuda.is_available():
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(False)
     torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[dtype]
     model = SentenceTransformer(model_name, device=device,
                                 model_kwargs={"torch_dtype": torch_dtype}, trust_remote_code=True)
@@ -110,7 +116,8 @@ def _encode_set(set_name, docs_df, model_name, max_seq_length, batch_size, devic
                 artifacts_dir, long_doc="truncate", force_rebuild=False):
     cache_root = Path(artifacts_dir) / "embeddings_longctx" / _model_slug(model_name)
     cache_root.mkdir(parents=True, exist_ok=True)
-    tag = f"{set_name}__{long_doc}"
+    # 키에 max_seq_length·dtype 포함 — 설정 바꾸면 새 캐시로 갈려 stale 재사용 방지.
+    tag = f"{set_name}__{long_doc}__L{max_seq_length}__{dtype}"
     npy_p = cache_root / f"{tag}.npy"
     meta_p = cache_root / f"{tag}.parquet"
     info_p = cache_root / f"{tag}.meta.json"
