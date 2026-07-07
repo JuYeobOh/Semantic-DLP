@@ -5,6 +5,7 @@ __pycache__/
 .ipynb_checkpoints/
 .pytest_cache
 tests/
+notebooks/
 
 # 데이터/아티팩트/모델 용량 큼 — git 미추적
 data/
