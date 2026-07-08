@@ -23,6 +23,8 @@ PARTITIONS = ("confidential", "benign")
 
 
 # original_set 의 family 를 셔플해 ratio 만큼 confidential 로 분할. 파일 있으면 로드(overwrite=False).
+# ★ split 파일 키는 original_set 별로 갈린다 — 같은 dataset 이라도 original_set 이 다르면
+#   family 우주가 다르므로(예: par3_gt vs par3_gt_split), 옛 split 을 스테일 재사용하면 안 됨.
 def make_split(
     prepared_dir: str | Path,
     splits_dir: str | Path,
@@ -35,7 +37,7 @@ def make_split(
     if not (0.0 < ratio < 1.0):
         raise ValueError(f"ratio 는 (0,1) 여야 함: {ratio}")
 
-    out_path = Path(splits_dir) / f"{dataset}_s{seed}.parquet"
+    out_path = Path(splits_dir) / f"{original_set}__s{seed}.parquet"
     if out_path.exists() and not overwrite:
         return pd.read_parquet(out_path)
 

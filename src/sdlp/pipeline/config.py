@@ -45,8 +45,8 @@ DATASET_DEFAULTS: dict[str, dict] = {
     },
     "par3": {      # 기밀 DB=GoogleMT 전문(분권 병합). 기본 positive=사람 번역가 1번(translator_1)만.
         # override: "사람 전부"=variant_sets=("par3_human",) / 분권 분리=par3_gt_split·par3_human_t1_split
-        "original_set": "par3_gt",
-        "variant_sets": ["par3_human_t1"],
+        "original_set": "par3_gt_split",
+        "variant_sets": ["par3_human_t1_split"],
     },
 }
 
