@@ -232,6 +232,9 @@ def longctx_votes(
         "long_doc": long_doc,
         "ref_encode_sec": ref_t["encode_sec"], "query_encode_sec": q_t["encode_sec"],
         "compare_sec": compare_sec, "total_sec": perf_counter() - t0,
+        # §4: inference = 쿼리 임베딩 + 비교(top-1). ref 임베딩은 등록(=인덱스 빌드)이라 제외.
+        "inference_total_sec": q_t["encode_sec"] + compare_sec,
+        "build_sec": ref_t["encode_sec"],
         "ref_source": ref_t["source"], "query_source": q_t["source"],
         "n_overflow_ref": ref_t["n_overflow"], "n_overflow_query": q_t["n_overflow"],
         "model_name": model_name, "max_seq_length": int(max_seq_length),

@@ -152,3 +152,34 @@ def build_false_positive_pairs(eval_df: pd.DataFrame) -> pd.DataFrame:
 # metrics dict 를 JSON 으로 저장.
 def save_metrics_json(metrics: dict, path) -> None:
     save_json(metrics, path)
+
+
+# eval_df(evaluate_run 반환) 각 행을 TP/FP/TN/FN 으로 분류한 category 컬럼 추가(복사본).
+# TP=기밀 변형 탐지(정탐) / FN=기밀 변형 놓침(미탐) / FP=비기밀 오탐(과탐) / TN=비기밀 정상통과.
+def add_case_categories(eval_df: pd.DataFrame) -> pd.DataFrame:
+    def _cat(is_positive: bool, detected: bool) -> str:
+        if is_positive and detected:
+            return "TP"
+        if is_positive and not detected:
+            return "FN"
+        if not is_positive and detected:
+            return "FP"
+        return "TN"
+
+    out = eval_df.copy()
+    out["category"] = [_cat(bool(a), bool(b))
+                       for a, b in zip(out["is_positive"], out["pred_detected"])]
+    return out
+
+
+# actual(기밀/비기밀) × pred(탐지/통과) 2x2 confusion matrix + 합계 (오탐·미탐 진단표).
+def confusion_matrix(eval_df: pd.DataFrame) -> pd.DataFrame:
+    d = eval_df if "category" in eval_df.columns else add_case_categories(eval_df)
+    n = d["category"].value_counts()
+    cm = pd.DataFrame(
+        {"탐지(pred+)": [int(n.get("TP", 0)), int(n.get("FP", 0))],
+         "통과(pred-)": [int(n.get("FN", 0)), int(n.get("TN", 0))]},
+        index=["기밀 변형(actual+)", "비기밀(actual-)"])
+    cm["합계"] = cm.sum(axis=1)
+    cm.loc["합계"] = cm.sum(axis=0)
+    return cm
