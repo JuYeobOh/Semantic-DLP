@@ -1,10 +1,11 @@
 """실행 설정(RunConfig) 과 데이터셋별 default.
 
-ponytail: 지금은 embedding(chunk_voting) method 하나. 라이벌(ssdeep/bm25/longctx)은 S11 에서
-          method 필드 + 분기 추가.
+ponytail: 청크 인덱스를 공유하는 method 는 여기 method 필드로 분기(chunk_voting/chunk_maxsim).
+          검색 메커니즘이 다른 라이벌(longctx/bm25/ssdeep 등)은 methods/ 에 별도 votes 함수.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from sdlp.chunking.core import ChunkSpec
 from sdlp.embedding.spec import EmbedSpec
 from sdlp.ids import sanitize_piece
 from sdlp.index.faiss_hnsw import FAISSHNSWConfig
+
+# 청크 인덱스를 공유하는 method (검색 동일, 집계만 다름).
+CHUNK_INDEX_METHODS: tuple[str, ...] = ("chunk_voting", "chunk_maxsim")
 
 # 데이터셋별 기본 original_set / variant_sets (None 이면 이걸 사용).
 DATASET_DEFAULTS: dict[str, dict] = {
@@ -66,16 +70,19 @@ class RunConfig:
     embed_spec: EmbedSpec = field(default_factory=EmbedSpec)
     faiss_config: FAISSHNSWConfig = field(default_factory=FAISSHNSWConfig)
 
+    method: str = "chunk_voting"                # chunk_voting(투표) | chunk_maxsim(최대 유사도). 검색 동일, 집계만 다름
     top_k: int = 1
     confidence_threshold: float = 0.5
-    use_score_weight: bool = False              # 논문 default = 표 개수 기반
+    use_score_weight: bool = False              # 논문 default = 표 개수 기반 (chunk_voting 전용)
     include_original_as_positive: bool = False  # ON 이면 기밀 원본도 positive
     save_retrieval: bool = True                 # retrieval_topk.parquet 저장 여부
 
-    # dataset 유효성 검사.
+    # dataset / method 유효성 검사.
     def __post_init__(self) -> None:
         if self.dataset not in DATASET_DEFAULTS:
             raise ValueError(f"모르는 dataset {self.dataset!r}. 선택: {list(DATASET_DEFAULTS)}")
+        if self.method not in CHUNK_INDEX_METHODS:
+            raise ValueError(f"모르는 method {self.method!r}. 선택: {list(CHUNK_INDEX_METHODS)}")
 
     # 해석된 original_set (None 이면 default).
     @property
@@ -89,6 +96,14 @@ class RunConfig:
             return list(self.variant_sets)
         return list(DATASET_DEFAULTS[self.dataset]["variant_sets"])
 
+    # 변형 조합 지문 — override 로 돌릴 때 run_dir 충돌 방지 (default 조합은 태그 없음, 기존 경로 유지).
+    def _variant_slug(self) -> str:
+        resolved = tuple(self.resolved_variant_sets)
+        if resolved == tuple(DATASET_DEFAULTS[self.dataset]["variant_sets"]):
+            return ""
+        digest = hashlib.sha1("|".join(resolved).encode("utf-8")).hexdigest()[:8]
+        return f"__var{digest}"
+
     # 실행 산출물 디렉터리 이름 (결과에 영향 주는 knob 들을 인코딩).
     def run_slug(self) -> str:
         vote_tag = "sw" if self.use_score_weight else "cb"   # sw=score-weighted, cb=count based
@@ -98,8 +113,11 @@ class RunConfig:
             f"{self.embed_spec.slug()}__{self.faiss_config.slug()}__"
             f"top{self.top_k}__t{thr}__{vote_tag}"
         )
+        raw += self._variant_slug()          # override 변형 조합만 지문 태그 (default 는 빈 문자열)
         if self.include_original_as_positive:
             raw += "__inclorig"
+        if self.method != "chunk_voting":   # default 는 태그 없음(기존 slug 유지)
+            raw += f"__{self.method}"
         return sanitize_piece(raw)
 
     # yaml/json 저장용 dict (해석된 값 + slug 포함).

@@ -35,7 +35,7 @@ from sdlp.pipeline.config import RunConfig
 from sdlp.retrieval.core import search_index
 from sdlp.schemas import CHUNK_META_COLUMNS
 from sdlp.splits.core import build_run_query_sets, make_split
-from sdlp.voting.core import vote_by_document
+from sdlp.voting.core import aggregate_maxsim_by_document, vote_by_document
 
 
 # 임베딩 단계 산출물 묶음 (ref/query 청크·임베딩 + 단계별 소요시간).
@@ -183,8 +183,11 @@ def run_experiment(cfg: RunConfig) -> dict:
         if cfg.save_retrieval:
             save_parquet(retrieval, run_dir / "retrieval_topk.parquet")
 
-        with timer() as t_vote:
-            votes = vote_by_document(retrieval, use_score_weight=cfg.use_score_weight)
+        with timer() as t_vote:   # 집계 (검색은 동일, method 로 집계만 분기)
+            if cfg.method == "chunk_maxsim":
+                votes = aggregate_maxsim_by_document(retrieval)
+            else:
+                votes = vote_by_document(retrieval, use_score_weight=cfg.use_score_weight)
         save_parquet(votes, run_dir / "votes.parquet")
 
         metrics, eval_df = evaluate_run(manifest, votes, cfg.confidence_threshold)

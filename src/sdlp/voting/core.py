@@ -58,3 +58,38 @@ def vote_by_document(retrieval_df: pd.DataFrame, use_score_weight: bool = False)
             "vote_distribution_json": json.dumps(agg.to_dict(), ensure_ascii=False),
         })
     return pd.DataFrame(rows)
+
+
+# chunk_maxsim 집계 — chunk_voting 과 검색은 동일, 집계만 다름(투표수 대신 최대 유사도).
+# confidence = 그 쿼리 문서의 모든 (청크, 이웃) 쌍 중 최대 cosine. pred = 그 최대 쌍의 ref 문서/family.
+# vote_distribution_json = ref 문서별 최대 유사도(내림차순). 보조통계는 그 분포의 집중도.
+def aggregate_maxsim_by_document(retrieval_df: pd.DataFrame) -> pd.DataFrame:
+    if len(retrieval_df) == 0:
+        return pd.DataFrame(columns=VOTES_COLUMNS)
+
+    rows: list[dict] = []
+    for query_doc_id, g in retrieval_df.groupby("query_doc_id", sort=False):
+        # 문서별 최대 유사도 (내림차순). confidence 는 전체 최대(=1등 문서의 최대).
+        agg = g.groupby("ref_doc_id")["score"].max().sort_values(ascending=False)
+        pred_doc_id = agg.index[0]
+        confidence = float(agg.iloc[0])
+        pred_family_id = g.loc[g["ref_doc_id"] == pred_doc_id, "ref_family_id"].iloc[0]
+        best_votes = int((g["ref_doc_id"] == pred_doc_id).sum())   # 참고용(득표 아님)
+        dist = agg.to_numpy()
+
+        rows.append({
+            "query_doc_id": query_doc_id,
+            "query_family_id": g["query_family_id"].iloc[0],
+            "pred_doc_id": pred_doc_id,
+            "pred_family_id": pred_family_id,
+            "n_chunks": int(g["query_chunk_id"].nunique()),
+            "n_votes": int(len(g)),                            # 집계된 (청크,이웃) 쌍 수
+            "best_votes": best_votes,
+            "confidence": confidence,
+            "vote_entropy": vote_entropy(dist),
+            "vote_variance": vote_variance(dist),
+            "vote_gini": vote_gini(dist),
+            "vote_distribution_json": json.dumps(
+                {k: round(float(v), 6) for k, v in agg.to_dict().items()}, ensure_ascii=False),
+        })
+    return pd.DataFrame(rows)
