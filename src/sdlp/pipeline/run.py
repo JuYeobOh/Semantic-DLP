@@ -191,6 +191,7 @@ def run_experiment(cfg: RunConfig) -> dict:
         save_parquet(votes, run_dir / "votes.parquet")
 
         metrics, eval_df = evaluate_run(manifest, votes)   # threshold=None → best-F1 로 판별
+        metrics["dataset"], metrics["method"] = cfg.dataset, cfg.method
         save_parquet(eval_df, run_dir / "per_query_eval.parquet")
         save_parquet(build_errors_by_family(eval_df), run_dir / "errors_by_family.parquet")
         save_parquet(build_false_positive_pairs(eval_df), run_dir / "fp_pairs.parquet")
@@ -199,3 +200,15 @@ def run_experiment(cfg: RunConfig) -> dict:
                       index_build_sec=t_idx.sec, retrieval_sec=t_ret.sec,
                       voting_sec=t_vote.sec, total_sec=t_total.sec)
     return metrics
+
+
+# ★ 모든 실험의 단일 진입점. chunk 계열은 run_experiment, 나머지 라이벌은 methods 레지스트리로 dispatch.
+# cfg.method + cfg.method_params 로 완전 지정 → 노트북은 (method, params)×dataset 루프 한 번.
+def run(cfg: RunConfig) -> dict:
+    if cfg.method in ("chunk_voting", "chunk_maxsim"):
+        return run_experiment(cfg)
+    from sdlp.methods import METHOD_BUILDERS, run_method   # lazy: 순환 import 회피
+    if cfg.method not in METHOD_BUILDERS:
+        raise NotImplementedError(f"method {cfg.method!r} 아직 미구현 (레지스트리에 없음)")
+    method_fn, run_tag = METHOD_BUILDERS[cfg.method](cfg)
+    return run_method(cfg, method_fn, cfg.method, run_tag)

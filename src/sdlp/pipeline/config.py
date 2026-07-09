@@ -16,6 +16,9 @@ from sdlp.index.faiss_hnsw import FAISSHNSWConfig
 
 # 청크 인덱스를 공유하는 method (검색 동일, 집계만 다름).
 CHUNK_INDEX_METHODS: tuple[str, ...] = ("chunk_voting", "chunk_maxsim")
+# 검색 메커니즘이 다른 라이벌 (methods/ 레지스트리에서 dispatch).
+RIVAL_METHODS: tuple[str, ...] = ("longctx", "embedding_pooled", "colbert", "bm25", "ssdeep", "minhash_lsh")
+ALL_METHODS: tuple[str, ...] = CHUNK_INDEX_METHODS + RIVAL_METHODS
 
 # 데이터셋별 기본 original_set / variant_sets (None 이면 이걸 사용).
 DATASET_DEFAULTS: dict[str, dict] = {
@@ -70,7 +73,8 @@ class RunConfig:
     embed_spec: EmbedSpec = field(default_factory=EmbedSpec)
     faiss_config: FAISSHNSWConfig = field(default_factory=FAISSHNSWConfig)
 
-    method: str = "chunk_voting"                # chunk_voting(투표) | chunk_maxsim(최대 유사도). 검색 동일, 집계만 다름
+    method: str = "chunk_voting"                # ALL_METHODS 중 하나. chunk 계열은 run_experiment, 나머지는 레지스트리
+    method_params: dict = field(default_factory=dict)   # 라이벌 파라미터 (예: longctx {model, long_doc, max_seq_length})
     top_k: int = 1
     use_score_weight: bool = False              # 논문 default = 표 개수 기반 (chunk_voting 전용)
     include_original_as_positive: bool = True   # 기본 ON: 기밀 원본도 positive(verbatim 유출 포함). OFF=변형만
@@ -80,8 +84,8 @@ class RunConfig:
     def __post_init__(self) -> None:
         if self.dataset not in DATASET_DEFAULTS:
             raise ValueError(f"모르는 dataset {self.dataset!r}. 선택: {list(DATASET_DEFAULTS)}")
-        if self.method not in CHUNK_INDEX_METHODS:
-            raise ValueError(f"모르는 method {self.method!r}. 선택: {list(CHUNK_INDEX_METHODS)}")
+        if self.method not in ALL_METHODS:
+            raise ValueError(f"모르는 method {self.method!r}. 선택: {list(ALL_METHODS)}")
 
     # 해석된 original_set (None 이면 default).
     @property
