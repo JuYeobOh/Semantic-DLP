@@ -18,22 +18,17 @@ from sdlp.pipeline.config import RunConfig
 from sdlp.splits.core import build_run_query_sets, make_split
 
 
-# method run 산출물 디렉터리 (dataset·split·변형·원본토글 + method 지문 으로 격리, 서로 안 덮음).
-# run_tag: method 고유 파라미터 지문(예: longctx 는 "granite97m__truncate").
+# method run 산출물 디렉터리 — chunk_voting 과 동일한 통일 레이아웃 runs/{run_ident}/{run_tag}/.
+# run_tag: method 고유 파라미터 leaf(예: longctx 는 "qwen3-0.6b__mean_pool__L32768__bf16").
 def method_run_dir(cfg: RunConfig, method_name: str, run_tag: str = "") -> Path:
-    ident = f"{method_name}__{cfg.dataset}__s{cfg.split_seed}"
-    ident += cfg._variant_slug()
-    if cfg.include_original_as_positive:
-        ident += "__inclorig"
-    if run_tag:
-        ident += f"__{run_tag}"
-    return Path(cfg.artifacts_dir) / "method_runs" / sanitize_piece(ident)
+    leaf = sanitize_piece(run_tag) if run_tag else "default"
+    return Path(cfg.artifacts_dir) / "runs" / cfg.run_ident(method_name) / leaf
 
 
 # votes 를 평가 + 경량 run_dir 저장 → metrics 반환 (prepared IO 불필요 → 테스트 대상).
-def save_method_run(run_dir, manifest_df, votes_df, timing, method_name, counts, threshold) -> dict:
+def save_method_run(run_dir, manifest_df, votes_df, timing, method_name, counts) -> dict:
     run_dir = ensure_dir(run_dir)
-    metrics, eval_df = evaluate_run(manifest_df, votes_df, threshold)
+    metrics, eval_df = evaluate_run(manifest_df, votes_df)   # threshold=None → best-F1
     metrics["method"] = method_name
     metrics["timing_sec"] = dict(timing)   # method 가 inference_total_sec 포함해 보고(§4)
     metrics["counts"] = dict(counts)
@@ -61,4 +56,4 @@ def run_method(cfg: RunConfig, method_fn, method_name: str, run_tag: str = "") -
         "n_benign": int(len(qs.benign_df)),
     }
     return save_method_run(method_run_dir(cfg, method_name, run_tag),
-                           manifest, votes, timing, method_name, counts, cfg.confidence_threshold)
+                           manifest, votes, timing, method_name, counts)

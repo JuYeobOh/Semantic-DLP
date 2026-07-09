@@ -11,7 +11,7 @@ max_seq_length 초과 문서 처리(long_doc):
   "mean_pool" = max_seq_length 윈도우로 쪼개 각각 인코딩 후 평균+정규화 (전문 보존)
   "exclude"   = 초과 문서 제외 (실험에서 빠짐)
 
-prepared-set×long_doc 단위 임베딩 캐시(artifacts/embeddings_longctx/{model}/{set}__{long_doc}.npy).
+prepared-set×long_doc 단위 임베딩 캐시(artifacts/cache/embeddings_longctx/{model}/{set}__{long_doc}.npy).
 torch/sentence_transformers 는 지연 import. votes_df 는 FINAL VOTES 스키마(confidence) 호환.
 """
 from __future__ import annotations
@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from sdlp.detection.core import vote_entropy, vote_gini, vote_variance
+from sdlp.embedding.spec import model_slug
 
 DEFAULT_MODEL = "ibm-granite/granite-embedding-97m-multilingual-r2"
 DEFAULT_MAX_SEQ = 32768   # granite r2 context (97m/311m 모두 32k)
@@ -31,11 +32,6 @@ LONG_DOC_MODES = ("truncate", "mean_pool", "exclude")
 
 # 프로세스 내 모델 재사용 (같은 설정이면 1회 로드).
 _MODEL_CACHE: dict[str, object] = {}
-
-
-# 모델 이름 → 캐시 디렉터리 안전 문자열.
-def _model_slug(model_name: str) -> str:
-    return model_name.replace("/", "__").replace(":", "_").replace("@", "_")
 
 
 # SentenceTransformer 로드 (지연 import, 프로세스 캐시). device None → cuda 있으면 cuda.
@@ -114,7 +110,7 @@ def _encode_docs(model, texts, doc_ids, family_ids, max_seq_length, batch_size, 
 # 반환: (emb, meta[doc_id,family_id], timing{encode_sec,source,n_overflow}).
 def _encode_set(set_name, docs_df, model_name, max_seq_length, batch_size, device, dtype,
                 artifacts_dir, long_doc="truncate", force_rebuild=False):
-    cache_root = Path(artifacts_dir) / "embeddings_longctx" / _model_slug(model_name)
+    cache_root = Path(artifacts_dir) / "cache" / "embeddings_longctx" / model_slug(model_name)
     cache_root.mkdir(parents=True, exist_ok=True)
     # 키에 max_seq_length·dtype 포함 — 설정 바꾸면 새 캐시로 갈려 stale 재사용 방지.
     tag = f"{set_name}__{long_doc}__L{max_seq_length}__{dtype}"

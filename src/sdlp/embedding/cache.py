@@ -1,6 +1,6 @@
 """임베딩 캐시 — 청크 임베딩 + 메타 + 빌드 소요시간을 디스크에 저장/로드.
 
-경로: artifacts/embeddings/{embed_slug}/{chunk_slug}/{set_name}/
+경로: artifacts/cache/embeddings/{embed_slug}/{chunk_slug}/{set_name}/
 파일: embeddings.npy (N×D float32), meta.parquet (청크 메타), config.json (시간·개수)
 config.json 의 embed_sec 덕분에 캐시 적중 시에도 throughput 재현이 가능하다.
 """
@@ -21,7 +21,7 @@ from sdlp.schemas import CHUNK_META_COLUMNS
 def embedding_cache_dir(
     artifacts_dir: str | Path, embed_spec: EmbedSpec, chunk_slug: str, set_name: str
 ) -> Path:
-    return Path(artifacts_dir) / "embeddings" / embed_spec.slug() / chunk_slug / set_name
+    return Path(artifacts_dir) / "cache" / "embeddings" / embed_spec.slug() / chunk_slug / set_name
 
 
 # 임베딩·메타·설정(시간 포함) 을 out_dir 에 저장.

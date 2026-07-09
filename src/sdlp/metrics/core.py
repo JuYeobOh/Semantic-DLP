@@ -10,7 +10,6 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 
 from sdlp.detection.core import apply_threshold
-from sdlp.io import save_json
 
 
 # 0 나눗셈 방지 나눗셈.
@@ -48,12 +47,22 @@ def build_query_manifest(positive_docs_df: pd.DataFrame, benign_docs_df: pd.Data
 
 
 # votes 에 임계값 적용 후 manifest 와 대조 → (집계 metrics dict, per-query merged df).
+# threshold=None(기본): best-F1 스윕값으로 판별 (모든 실험이 best threshold 기준). 숫자면 그 값 사용(조회용).
 def evaluate_run(
     query_manifest_df: pd.DataFrame,
     votes_df: pd.DataFrame,
-    threshold: float,
+    threshold: float | None = None,
     confidence_col: str = "confidence",
 ) -> tuple[dict[str, Any], pd.DataFrame]:
+    # 분리도·best 스윕용 threshold-independent 점수/라벨 (미탐 confidence 는 0).
+    scored = query_manifest_df.merge(votes_df[["query_doc_id", confidence_col]],
+                                     on="query_doc_id", how="left")
+    label = scored["is_positive"].astype(int).to_numpy()
+    score = scored[confidence_col].fillna(0.0).to_numpy()
+    best = _best_f1_sweep(label, score)
+    if threshold is None:
+        threshold = best["best_threshold"] if best["best_threshold"] is not None else 0.5
+
     pred = apply_threshold(votes_df, threshold=threshold, confidence_col=confidence_col)
     merged = query_manifest_df.merge(pred, on="query_doc_id", how="left")
     merged["pred_detected"] = merged["pred_detected"].fillna(False)
@@ -77,23 +86,19 @@ def evaluate_run(
     attr_all = _safe_div(int((det_pos_mask & fam_ok).sum()), int(pos_mask.sum()))
     attr_detected = _safe_div(int((det_pos_mask & fam_ok).sum()), int(det_pos_mask.sum()))
 
-    # threshold-independent 분리도 (미탐 confidence 는 0 으로). 양성·음성 둘 다 있어야 정의됨.
-    score = merged[confidence_col].fillna(0.0).to_numpy()
-    label = yt
     pr_auc = roc_auc = None
     if len(label) and 0 < label.sum() < len(label):
         pr_auc = float(average_precision_score(label, score))
         roc_auc = float(roc_auc_score(label, score))
 
     metrics: dict[str, Any] = {
-        "threshold": float(threshold),
+        "threshold": float(threshold),   # 실제 판별 지점 (기본 = best_threshold)
         "confidence_col": confidence_col,
         "detection": {
             "tp": tp, "fp": fp, "tn": tn, "fn": fn,
             "precision": precision, "recall": recall, "f1": f1, "accuracy": accuracy,
         },
-        # 임계값 스윕 최적 F1 (고정 threshold 와 별도 — 분리도 기준 상한).
-        "detection_best": _best_f1_sweep(label, score),
+        "detection_best": best,   # 임계값 스윕 최적치 (threshold=None 이면 detection 과 동일 지점)
         "attribution": {
             "family_acc_on_all_positive": attr_all,
             "family_acc_on_detected_positive": attr_detected,
@@ -147,11 +152,6 @@ def build_false_positive_pairs(eval_df: pd.DataFrame) -> pd.DataFrame:
     ]
     cols = [c for c in cols if c in fp.columns]   # eval_df 에 있는 컬럼만 (호환)
     return fp[cols].sort_values("confidence", ascending=False).reset_index(drop=True)
-
-
-# metrics dict 를 JSON 으로 저장.
-def save_metrics_json(metrics: dict, path) -> None:
-    save_json(metrics, path)
 
 
 # eval_df(evaluate_run 반환) 각 행을 TP/FP/TN/FN 으로 분류한 category 컬럼 추가(복사본).

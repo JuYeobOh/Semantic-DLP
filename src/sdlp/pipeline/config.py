@@ -72,9 +72,8 @@ class RunConfig:
 
     method: str = "chunk_voting"                # chunk_voting(투표) | chunk_maxsim(최대 유사도). 검색 동일, 집계만 다름
     top_k: int = 1
-    confidence_threshold: float = 0.5
     use_score_weight: bool = False              # 논문 default = 표 개수 기반 (chunk_voting 전용)
-    include_original_as_positive: bool = False  # ON 이면 기밀 원본도 positive
+    include_original_as_positive: bool = True   # 기본 ON: 기밀 원본도 positive(verbatim 유출 포함). OFF=변형만
     save_retrieval: bool = True                 # retrieval_topk.parquet 저장 여부
 
     # dataset / method 유효성 검사.
@@ -104,20 +103,23 @@ class RunConfig:
         digest = hashlib.sha1("|".join(resolved).encode("utf-8")).hexdigest()[:8]
         return f"__var{digest}"
 
-    # 실행 산출물 디렉터리 이름 (결과에 영향 주는 knob 들을 인코딩).
-    def run_slug(self) -> str:
-        vote_tag = "sw" if self.use_score_weight else "cb"   # sw=score-weighted, cb=count based
-        thr = int(round(self.confidence_threshold * 100))
-        raw = (
-            f"{self.dataset}__s{self.split_seed}__{self.chunk_spec.slug()}__"
-            f"{self.embed_spec.slug()}__{self.faiss_config.slug()}__"
-            f"top{self.top_k}__t{thr}__{vote_tag}"
-        )
-        raw += self._variant_slug()          # override 변형 조합만 지문 태그 (default 는 빈 문자열)
+    # 실험 정체성 — runs/<run_ident>/ 의 첫 단계. 검색 방법 + 기밀 DB(original_set) + 쿼리 구성.
+    # method: 명시 안 하면 self.method(chunk_voting/chunk_maxsim). 라이벌은 "longctx" 등 직접 전달.
+    def run_ident(self, method: str | None = None) -> str:
+        ident = f"{method or self.method}__{self.resolved_original_set}__s{self.split_seed}"
+        ident += self._variant_slug()
         if self.include_original_as_positive:
-            raw += "__inclorig"
-        if self.method != "chunk_voting":   # default 는 태그 없음(기존 slug 유지)
-            raw += f"__{self.method}"
+            ident += "__inclorig"
+        return sanitize_piece(ident)
+
+    # 세부 파라미터 슬러그 — runs/<run_ident>/<config_slug>/ 의 leaf. chunk 계열 파라미터(임베딩·청킹·인덱스·투표).
+    # threshold 는 항상 best-F1 로 판별하므로 slug 에 안 넣는다.
+    def config_slug(self) -> str:
+        vote_tag = "sw" if self.use_score_weight else "cb"
+        raw = (
+            f"{self.embed_spec.slug()}__{self.chunk_spec.slug()}__"
+            f"{self.faiss_config.slug()}__top{self.top_k}__{vote_tag}"
+        )
         return sanitize_piece(raw)
 
     # yaml/json 저장용 dict (해석된 값 + slug 포함).
@@ -131,6 +133,7 @@ class RunConfig:
         d["_resolved"] = {
             "original_set": self.resolved_original_set,
             "variant_sets": self.resolved_variant_sets,
-            "run_slug": self.run_slug(),
+            "run_ident": self.run_ident(),
+            "config_slug": self.config_slug(),
         }
         return d

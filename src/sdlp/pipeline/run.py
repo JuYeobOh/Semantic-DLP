@@ -29,7 +29,6 @@ from sdlp.metrics.core import (
     build_false_positive_pairs,
     build_query_manifest,
     evaluate_run,
-    save_metrics_json,
 )
 from sdlp.pipeline.config import RunConfig
 from sdlp.retrieval.core import search_index
@@ -162,12 +161,13 @@ def _finalize_metrics(metrics, run_dir, qs, emb: _EmbedResult, votes,
         "n_vectors": int(len(emb.ref_chunks)),
         "dim": int(emb.ref_emb.shape[1]) if emb.ref_emb.ndim == 2 else 0,
     }
-    save_metrics_json(metrics, run_dir / "metrics.json")
+    save_json(metrics, run_dir / "metrics.json")
 
 
 # 파이프라인 1회 실행. metrics dict 반환 + run_dir 에 산출물 저장.
 def run_experiment(cfg: RunConfig) -> dict:
-    run_dir = ensure_dir(Path(cfg.artifacts_dir) / "runs" / cfg.run_slug())
+    # 통일 레이아웃: runs/{method}__{original_set}__s42{tags}/{chunk 파라미터}/
+    run_dir = ensure_dir(Path(cfg.artifacts_dir) / "runs" / cfg.run_ident() / cfg.config_slug())
     save_json(cfg.as_serializable(), run_dir / "config.json")
 
     with timer() as t_total:
@@ -190,7 +190,7 @@ def run_experiment(cfg: RunConfig) -> dict:
                 votes = vote_by_document(retrieval, use_score_weight=cfg.use_score_weight)
         save_parquet(votes, run_dir / "votes.parquet")
 
-        metrics, eval_df = evaluate_run(manifest, votes, cfg.confidence_threshold)
+        metrics, eval_df = evaluate_run(manifest, votes)   # threshold=None → best-F1 로 판별
         save_parquet(eval_df, run_dir / "per_query_eval.parquet")
         save_parquet(build_errors_by_family(eval_df), run_dir / "errors_by_family.parquet")
         save_parquet(build_false_positive_pairs(eval_df), run_dir / "fp_pairs.parquet")
