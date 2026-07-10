@@ -31,7 +31,22 @@ def _build_longctx(cfg):
     return method_fn, run_tag
 
 
+# bm25 builder — scope(doc|keyword). keyword 는 원본 gold KP 로딩(미지원 데이터셋이면 ValueError).
+def _build_bm25(cfg):
+    scope = cfg.method_params.get("scope", "doc")
+    kp = None
+    if scope == "keyword":
+        from sdlp.methods.bm25 import load_keyphrases_by_family
+        kp = load_keyphrases_by_family(cfg.prepared_dir, cfg.resolved_original_set)
+
+    def method_fn(reference_df, query_df):
+        from sdlp.methods.bm25 import bm25_votes
+        return bm25_votes(reference_df, query_df, scope=scope, keyphrase_by_family=kp)
+
+    return method_fn, f"bm25__{scope}"
+
+
 # method 이름 → builder(cfg) -> (method_fn, run_tag). 미구현 라이벌은 아직 등록 전.
-METHOD_BUILDERS = {"longctx": _build_longctx}
+METHOD_BUILDERS = {"longctx": _build_longctx, "bm25": _build_bm25}
 
 __all__ = ["longctx_votes", "run_method", "save_method_run", "method_run_dir", "METHOD_BUILDERS"]
