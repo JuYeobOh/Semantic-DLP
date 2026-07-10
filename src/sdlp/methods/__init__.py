@@ -25,7 +25,8 @@ def _build_longctx(cfg):
         return longctx_votes(
             reference_df, query_df, long_doc=mode, model_name=model, max_seq_length=max_seq,
             dtype=dtype, batch_size=batch, artifacts_dir=cfg.artifacts_dir,
-            ref_set_name=f"{orig}__s{seed}__ref", query_set_name=f"{q_tag}__query")
+            ref_set_name=f"{orig}__s{seed}__ref", query_set_name=f"{q_tag}__query",
+            faiss_config=cfg.faiss_config)
 
     run_tag = f"{model.split('/')[-1]}__{mode}__L{max_seq}"
     return method_fn, run_tag
@@ -46,7 +47,17 @@ def _build_bm25(cfg):
     return method_fn, f"bm25__{scope}"
 
 
+# embedding_pooled builder — chunk_voting 과 같은 50단어 청크 임베딩(캐시 공유)을 문서별 mean-pool.
+def _build_embedding_pooled(cfg):
+    def method_fn(reference_df, query_df):
+        from sdlp.methods.embedding_pooled import embedding_pooled_votes
+        return embedding_pooled_votes(reference_df, query_df, cfg)
+
+    return method_fn, f"{cfg.embed_spec.slug()}__{cfg.chunk_spec.slug()}__pooled"
+
+
 # method 이름 → builder(cfg) -> (method_fn, run_tag). 미구현 라이벌은 아직 등록 전.
-METHOD_BUILDERS = {"longctx": _build_longctx, "bm25": _build_bm25}
+METHOD_BUILDERS = {"longctx": _build_longctx, "bm25": _build_bm25,
+                   "embedding_pooled": _build_embedding_pooled}
 
 __all__ = ["longctx_votes", "run_method", "save_method_run", "method_run_dir", "METHOD_BUILDERS"]

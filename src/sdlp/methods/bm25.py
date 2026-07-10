@@ -110,6 +110,5 @@ def bm25_votes(reference_docs_df, query_docs_df, scope="doc",
             "vote_distribution_json": json.dumps(
                 {k2: round(float(v), 4) for k2, v in family_scores.items()}, ensure_ascii=False),
         })
-    timing = {"inference_total_sec": inference_sec, "build_sec": build_sec,
-              "index_sec": build_sec, "search_sec": inference_sec, "scope": scope}
+    timing = {"inference_total_sec": inference_sec, "build_sec": build_sec, "scope": scope}
     return pd.DataFrame(rows), timing

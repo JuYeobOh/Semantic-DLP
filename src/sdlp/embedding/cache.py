@@ -18,10 +18,12 @@ from sdlp.schemas import CHUNK_META_COLUMNS
 
 
 # (모델 + 청킹설정 + 데이터셋) 을 키로 하는 캐시 디렉터리 경로.
+# normalize=False(raw 벡터)는 embeddings_raw/ 로 갈라 기존 정규화 캐시(embeddings/)와 안 섞이게 한다.
 def embedding_cache_dir(
     artifacts_dir: str | Path, embed_spec: EmbedSpec, chunk_slug: str, set_name: str
 ) -> Path:
-    return Path(artifacts_dir) / "cache" / "embeddings" / embed_spec.slug() / chunk_slug / set_name
+    kind = "embeddings" if embed_spec.normalize_embeddings else "embeddings_raw"
+    return Path(artifacts_dir) / "cache" / kind / embed_spec.slug() / chunk_slug / set_name
 
 
 # 임베딩·메타·설정(시간 포함) 을 out_dir 에 저장.
