@@ -56,8 +56,17 @@ def _build_embedding_pooled(cfg):
     return method_fn, f"{cfg.embed_spec.slug()}__{cfg.chunk_spec.slug()}__pooled"
 
 
+# ssdeep builder — 퍼지 해시(ppdeep) 전문 비교. 파라미터 없음.
+def _build_ssdeep(cfg):
+    def method_fn(reference_df, query_df):
+        from sdlp.methods.ssdeep import ssdeep_votes
+        return ssdeep_votes(reference_df, query_df)
+
+    return method_fn, "ssdeep"
+
+
 # method 이름 → builder(cfg) -> (method_fn, run_tag). 미구현 라이벌은 아직 등록 전.
 METHOD_BUILDERS = {"longctx": _build_longctx, "bm25": _build_bm25,
-                   "embedding_pooled": _build_embedding_pooled}
+                   "embedding_pooled": _build_embedding_pooled, "ssdeep": _build_ssdeep}
 
 __all__ = ["longctx_votes", "run_method", "save_method_run", "method_run_dir", "METHOD_BUILDERS"]
