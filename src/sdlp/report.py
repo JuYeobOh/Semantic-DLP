@@ -44,3 +44,38 @@ def pivot_table(df: pd.DataFrame, value: str = "best_f1",
     if cols_order:
         pv = pv.reindex(columns=[c for c in cols_order if c in pv.columns])
     return pv
+
+
+# 논문 최종 표의 행 정의 — (표시라벨, method, config leaf 부분매칭). config_sub=None 이면 method 전체.
+# 같은 method 의 변형을 leaf 로 구분: chunk_voting cb/sw, longctx qwen/granite, bm25 doc/keyword.
+PAPER_ROWS: list[tuple[str, str, str | None]] = [
+    ("chunk + voting (Count-based)",      "chunk_voting",     "__cb"),
+    ("chunk + voting (Score-weighted)",   "chunk_voting",     "__sw"),
+    ("longcontext - qwen 0.6B (decoder)", "longctx",          "qwen"),
+    ("longcontext - ibm 97m (encoder)",   "longctx",          "granite"),
+    ("embedding mean pooling",            "embedding_pooled", None),
+    ("colbertv2",                         "colbert",          None),
+    ("chunk(maxsim θ)",                   "chunk_maxsim",     None),
+    ("bm25 (full doc)",                   "bm25",             "bm25__doc"),
+    ("bm25 (keyword)",                    "bm25",             "bm25__keyword"),
+    ("ssdeep",                            "ssdeep",           None),
+    ("minhash+lsh",                       "minhash_lsh",      None),
+]
+
+
+# 논문 최종 표 — 행 = rows_spec(변형까지 구분·순서 고정), 열 = dataset. 안 돌린 셀은 NaN.
+# method 만으로 피벗하면 bm25 doc/keyword·voting cb/sw 가 뭉개지므로 config leaf 로 변형을 분리한다.
+def paper_table(df: pd.DataFrame, value: str = "best_f1",
+                rows_spec: list[tuple[str, str, str | None]] = PAPER_ROWS,
+                cols_order: list[str] | None = None) -> pd.DataFrame:
+    datasets = cols_order or sorted(df["dataset"].dropna().unique())
+    out = pd.DataFrame(index=[label for label, _, _ in rows_spec], columns=datasets, dtype=float)
+    for label, method, config_sub in rows_spec:
+        sub = df[df["method"] == method]
+        if config_sub:
+            sub = sub[sub["config"].str.contains(config_sub, case=False, regex=False, na=False)]
+        for ds in datasets:
+            vals = sub.loc[sub["dataset"] == ds, value].dropna()
+            if len(vals):
+                out.loc[label, ds] = float(vals.max())
+    return out
