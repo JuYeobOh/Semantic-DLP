@@ -21,6 +21,8 @@ dependencies = [
     "pystemmer>=3.1.0",
     "matplotlib>=3.11.0",
     "ppdeep>=20260221",
+    "tqdm>=4.68.3",
+    "datasketch>=2.0.0",
 ]
 
 [dependency-groups]

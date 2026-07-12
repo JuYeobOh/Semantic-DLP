@@ -11,6 +11,7 @@ from time import perf_counter
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from sdlp.detection.core import vote_entropy, vote_gini, vote_variance
 from sdlp.voting.core import VOTES_COLUMNS
@@ -44,9 +45,9 @@ def ssdeep_votes(reference_docs_df, query_docs_df):
     t1 = perf_counter()
     q_hashes = _hash_texts(q_texts)
     rows = []
-    # ponytail: single-thread O(N_ref × N_query) 비교. 대규모(casimir)에서 느리면 query 단위
-    # ProcessPoolExecutor 로 병렬화 (worker 가 raw ppdeep.compare 호출 → 결과 동일).
-    for qi in range(len(query_docs_df)):
+    # ponytail: single-thread O(N_ref × N_query) 비교. 대규모(casimir)에서 느리면 blocksize 버킷팅
+    # (호환 blocksize끼리만 비교 → 결과 동일) 또는 query 단위 ProcessPoolExecutor 로 병렬화.
+    for qi in tqdm(range(len(query_docs_df)), desc="ssdeep compare", leave=False):
         qh = q_hashes[qi]
         family_scores: dict[str, int] = {}
         doc_scores: dict[str, int] = {}

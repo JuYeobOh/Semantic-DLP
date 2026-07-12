@@ -65,8 +65,24 @@ def _build_ssdeep(cfg):
     return method_fn, "ssdeep"
 
 
+# minhash_lsh builder — num_perm/threshold/shingle_k. LSH 인덱스로 후보 생성.
+def _build_minhash_lsh(cfg):
+    p = cfg.method_params
+    num_perm = int(p.get("num_perm", 128))
+    threshold = float(p.get("threshold", 0.2))
+    shingle_k = int(p.get("shingle_k", 5))
+
+    def method_fn(reference_df, query_df):
+        from sdlp.methods.minhash_lsh import minhash_lsh_votes
+        return minhash_lsh_votes(reference_df, query_df, num_perm=num_perm,
+                                 threshold=threshold, shingle_k=shingle_k)
+
+    return method_fn, f"minhash_lsh__p{num_perm}__t{threshold}__k{shingle_k}"
+
+
 # method 이름 → builder(cfg) -> (method_fn, run_tag). 미구현 라이벌은 아직 등록 전.
 METHOD_BUILDERS = {"longctx": _build_longctx, "bm25": _build_bm25,
-                   "embedding_pooled": _build_embedding_pooled, "ssdeep": _build_ssdeep}
+                   "embedding_pooled": _build_embedding_pooled, "ssdeep": _build_ssdeep,
+                   "minhash_lsh": _build_minhash_lsh}
 
 __all__ = ["longctx_votes", "run_method", "save_method_run", "method_run_dir", "METHOD_BUILDERS"]
