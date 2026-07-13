@@ -23,6 +23,8 @@ dependencies = [
     "ppdeep>=20260221",
     "tqdm>=4.68.3",
     "datasketch>=2.0.0",
+    "pylate>=1.6.0",
+    "bert-score>=0.3.13",
 ]
 
 [dependency-groups]
