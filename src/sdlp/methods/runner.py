@@ -26,10 +26,12 @@ def method_run_dir(cfg: RunConfig, method_name: str, run_tag: str = "") -> Path:
 
 
 # votes 를 평가 + 경량 run_dir 저장 → metrics 반환 (prepared IO 불필요 → 테스트 대상).
-def save_method_run(run_dir, manifest_df, votes_df, timing, method_name, counts, dataset=None) -> dict:
+def save_method_run(run_dir, manifest_df, votes_df, timing, method_name, counts, dataset=None,
+                    variant_sets=None) -> dict:
     run_dir = ensure_dir(run_dir)
     metrics, eval_df = evaluate_run(manifest_df, votes_df)   # threshold=None → best-F1
     metrics["method"], metrics["dataset"] = method_name, dataset
+    metrics["variant_sets"] = list(variant_sets or [])   # 변형별 매트릭스 열 라벨용
     metrics["timing_sec"] = dict(timing)   # method 가 inference_total_sec 포함해 보고(§4)
     metrics["counts"] = dict(counts)
     save_parquet(votes_df, run_dir / "votes.parquet")
@@ -56,4 +58,5 @@ def run_method(cfg: RunConfig, method_fn, method_name: str, run_tag: str = "") -
         "n_benign": int(len(qs.benign_df)),
     }
     return save_method_run(method_run_dir(cfg, method_name, run_tag),
-                           manifest, votes, timing, method_name, counts, dataset=cfg.dataset)
+                           manifest, votes, timing, method_name, counts, dataset=cfg.dataset,
+                           variant_sets=cfg.resolved_variant_sets)

@@ -22,6 +22,7 @@ def load_all_metrics(artifacts_dir: str | Path = "artifacts") -> pd.DataFrame:
         rows.append({
             "method": m.get("method"),
             "dataset": m.get("dataset"),
+            "variant_sets": "|".join(m.get("variant_sets") or []),   # 변형별 열 라벨 매핑용
             "run_ident": mp.parent.parent.name,
             "config": mp.parent.name,
             "f1": d.get("f1"),
@@ -63,19 +64,21 @@ PAPER_ROWS: list[tuple[str, str, str | None]] = [
 ]
 
 
-# 논문 최종 표 — 행 = rows_spec(변형까지 구분·순서 고정), 열 = dataset. 안 돌린 셀은 NaN.
+# 논문 최종 표 — 행 = rows_spec(변형까지 구분·순서 고정), 열 = col_field. 안 돌린 셀은 NaN.
 # method 만으로 피벗하면 bm25 doc/keyword·voting cb/sw 가 뭉개지므로 config leaf 로 변형을 분리한다.
+# col_field: 열로 쓸 컬럼. "dataset"(기본) 또는 노트북에서 만든 "col"(=dataset·variant) 등.
 def paper_table(df: pd.DataFrame, value: str = "best_f1",
                 rows_spec: list[tuple[str, str, str | None]] = PAPER_ROWS,
-                cols_order: list[str] | None = None) -> pd.DataFrame:
-    datasets = cols_order or sorted(df["dataset"].dropna().unique())
-    out = pd.DataFrame(index=[label for label, _, _ in rows_spec], columns=datasets, dtype=float)
+                cols_order: list[str] | None = None,
+                col_field: str = "dataset") -> pd.DataFrame:
+    cols = cols_order or sorted(df[col_field].dropna().unique())
+    out = pd.DataFrame(index=[label for label, _, _ in rows_spec], columns=cols, dtype=float)
     for label, method, config_sub in rows_spec:
         sub = df[df["method"] == method]
         if config_sub:
             sub = sub[sub["config"].str.contains(config_sub, case=False, regex=False, na=False)]
-        for ds in datasets:
-            vals = sub.loc[sub["dataset"] == ds, value].dropna()
+        for c in cols:
+            vals = sub.loc[sub[col_field] == c, value].dropna()
             if len(vals):
-                out.loc[label, ds] = float(vals.max())
+                out.loc[label, c] = float(vals.max())
     return out
