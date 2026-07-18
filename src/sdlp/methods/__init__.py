@@ -16,16 +16,16 @@ def _build_longctx(cfg):
     model = p.get("model", DEFAULT_MODEL)
     mode = p.get("long_doc", "truncate")
     max_seq = int(p.get("max_seq_length", DEFAULT_MAX_SEQ))
-    dtype = p.get("dtype", "float32")
+    dtype = p.get("dtype", "bfloat16")   # 캐시·기존 run 이 전부 bfloat16 → 기본값 일치(안 넘겨도 hit)
     batch = int(p.get("batch_size", 8))
-    orig, seed = cfg.resolved_original_set, cfg.split_seed
-    q_tag = f"{orig}__s{seed}" + ("__inclorig" if cfg.include_original_as_positive else "")
+    # 캐시는 prepared set 단위(키=set명) — 변형별 run 이 같은 set 캐시를 공유, 섞임 원천 차단.
+    set_names = [cfg.resolved_original_set, *cfg.resolved_variant_sets]
 
     def method_fn(reference_df, query_df):
         return longctx_votes(
-            reference_df, query_df, long_doc=mode, model_name=model, max_seq_length=max_seq,
+            reference_df, query_df, set_names=set_names, prepared_dir=cfg.prepared_dir,
+            long_doc=mode, model_name=model, max_seq_length=max_seq,
             dtype=dtype, batch_size=batch, artifacts_dir=cfg.artifacts_dir,
-            ref_set_name=f"{orig}__s{seed}__ref", query_set_name=f"{q_tag}__query",
             faiss_config=cfg.faiss_config)
 
     run_tag = f"{model.split('/')[-1]}__{mode}__L{max_seq}"

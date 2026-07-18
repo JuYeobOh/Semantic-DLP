@@ -23,6 +23,7 @@ def load_all_metrics(artifacts_dir: str | Path = "artifacts") -> pd.DataFrame:
             "method": m.get("method"),
             "dataset": m.get("dataset"),
             "variant_sets": "|".join(m.get("variant_sets") or []),   # 변형별 열 라벨 매핑용
+            "inclorig": m.get("include_original_as_positive"),        # 원본(verbatim) 열 구분용
             "run_ident": mp.parent.parent.name,
             "config": mp.parent.name,
             "f1": d.get("f1"),

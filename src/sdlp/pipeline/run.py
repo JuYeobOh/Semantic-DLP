@@ -193,6 +193,7 @@ def run_experiment(cfg: RunConfig) -> dict:
         metrics, eval_df = evaluate_run(manifest, votes)   # threshold=None → best-F1 로 판별
         metrics["dataset"], metrics["method"] = cfg.dataset, cfg.method
         metrics["variant_sets"] = list(cfg.resolved_variant_sets)   # 변형별 매트릭스 열 라벨용
+        metrics["include_original_as_positive"] = bool(cfg.include_original_as_positive)
         save_parquet(eval_df, run_dir / "per_query_eval.parquet")
         save_parquet(build_errors_by_family(eval_df), run_dir / "errors_by_family.parquet")
         save_parquet(build_false_positive_pairs(eval_df), run_dir / "fp_pairs.parquet")
