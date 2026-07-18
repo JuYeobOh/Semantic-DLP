@@ -80,9 +80,25 @@ def _build_minhash_lsh(cfg):
     return method_fn, f"minhash_lsh__p{num_perm}__t{threshold}__k{shingle_k}"
 
 
+# colbert builder — B2(문서 bag MaxSim mean). ref=doc_len·query=query_len 모델최대 청킹, 마스크 모드 없음.
+def _build_colbert(cfg):
+    p = cfg.method_params
+    model = p.get("model", "colbert-ir/colbertv2.0")
+    shortlist_k = int(p.get("shortlist_k", 32))
+    # 캐시는 prepared set 단위(키=set명) — 변형별 run 이 같은 set 캐시 공유, 섞임 원천 차단.
+    set_names = [cfg.resolved_original_set, *cfg.resolved_variant_sets]
+
+    def method_fn(reference_df, query_df):
+        from sdlp.methods.colbert import colbert_votes
+        return colbert_votes(reference_df, query_df, set_names=set_names, prepared_dir=cfg.prepared_dir,
+                             model_name=model, shortlist_k=shortlist_k, artifacts_dir=cfg.artifacts_dir)
+
+    return method_fn, "colbertv2__b2mean"
+
+
 # method 이름 → builder(cfg) -> (method_fn, run_tag). 미구현 라이벌은 아직 등록 전.
 METHOD_BUILDERS = {"longctx": _build_longctx, "bm25": _build_bm25,
                    "embedding_pooled": _build_embedding_pooled, "ssdeep": _build_ssdeep,
-                   "minhash_lsh": _build_minhash_lsh}
+                   "minhash_lsh": _build_minhash_lsh, "colbert": _build_colbert}
 
 __all__ = ["longctx_votes", "run_method", "save_method_run", "method_run_dir", "METHOD_BUILDERS"]
