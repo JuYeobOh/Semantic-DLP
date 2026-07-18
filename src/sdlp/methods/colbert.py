@@ -1,6 +1,7 @@
 """colbertv2 라이벌 (pylate) — 토큰 late-interaction. B2 = 문서 토큰-bag MaxSim mean.
 
-문서를 모델 최대 길이에 맞춰 청킹(ref=doc_len, query=query_len)한 뒤 토큰을 이어붙여 doc-bag 을 만든다.
+문서를 **토큰 단위**로 모델 최대 길이에 맞춰 청킹(ref≈doc_len 500, query≈query_len 90, 모델 tokenizer)한
+뒤 토큰 임베딩을 이어붙여 doc-bag 을 만든다.
 - 등록(build): ref 청크 토큰을 **PLAID 인덱스**에 (id=chunk_id, PLAID 는 passage≤512 전제라 청크 단위).
 - 후보(Stage1): query 청크 → PLAID retrieve → 그 청크들의 **doc_id 집합** = 후보 ref 문서 (투표 없음).
 - 채점(Stage2/B2): query doc-bag ↔ 후보 ref doc-bag **exact MaxSim mean** = confidence.
@@ -28,8 +29,9 @@ from sdlp.voting.core import VOTES_COLUMNS
 DEFAULT_MODEL = "colbert-ir/colbertv2.0"
 QUERY_LEN = 96
 DOC_LEN = 512
-REF_WORDS = 350     # doc-side 청크 (≈doc_len 토큰 채움)
-QUERY_WORDS = 64    # query-side 청크 (≈query_len 토큰 채움)
+# 토큰 단위 청킹(모델 tokenizer) — 특수토큰([CLS]/[Q|D]/[SEP]) 여유 두고 모델 최대까지 채움.
+REF_TOKENS = 500     # doc-side (< doc_len 512)
+QUERY_TOKENS = 90    # query-side (< query_len 96)
 
 
 # query bag ↔ ref bag MaxSim mean. Q,D: torch [Ntok,128] (L2정규화 → 내적=cosine).
@@ -62,12 +64,12 @@ def _candidate_docs(results, q_chunk_docs, ref_chunk_to_doc, shortlist_k):
 # 한 prepared **set 전체**를 청크 토큰 임베딩으로 (set 단위 ragged 캐시 — split·변형·inclorig 무관).
 # is_query 로 청킹 길이(query_len/doc_len)와 [Q]/[D] 인코딩이 갈리므로 캐시도 side 별로 분리.
 # 반환: (meta[chunk_id,doc_id,family_id,start,end], embs 리스트). 미스 시에만 set 로드+인코딩.
-def _encode_set(model, set_name, is_query, artifacts_dir, prepared_dir, model_name, batch_size):
+def _encode_set(get_model, set_name, is_query, artifacts_dir, prepared_dir, model_name, batch_size):
     from sdlp.chunking.core import ChunkSpec, build_chunks_df
 
-    words = QUERY_WORDS if is_query else REF_WORDS
+    n_tok = QUERY_TOKENS if is_query else REF_TOKENS
     side = "q" if is_query else "d"
-    slug = f"word{words}o0__{side}"
+    slug = f"tok{n_tok}o0__{side}"
     cache_dir = Path(artifacts_dir) / "cache" / "embeddings_colbert" / model_slug(model_name) / slug / set_name
     meta_p, tok_p = cache_dir / "meta.parquet", cache_dir / "tokens.npy"
     if meta_p.exists() and tok_p.exists():
@@ -78,7 +80,9 @@ def _encode_set(model, set_name, is_query, artifacts_dir, prepared_dir, model_na
 
     from sdlp.io import load_prepared_set
     docs_df = load_prepared_set(prepared_dir, set_name)
-    chunks_df = build_chunks_df(docs_df, ChunkSpec(mode="word", size=words, overlap=0)).reset_index(drop=True)
+    model = get_model()   # 캐시 미스일 때만 모델 로드 (토큰 청킹에 tokenizer 필요)
+    chunks_df = build_chunks_df(docs_df, ChunkSpec(mode="token", size=n_tok, overlap=0),
+                                tokenizer=model.tokenizer).reset_index(drop=True)
     texts = chunks_df["chunk_text"].astype(str).tolist()
     raw = model.encode(texts, is_query=is_query, convert_to_tensor=True,
                        batch_size=batch_size, show_progress_bar=True)
@@ -99,11 +103,11 @@ def _encode_set(model, set_name, is_query, artifacts_dir, prepared_dir, model_na
 
 # 여러 set 을 인코딩(캐시)해 doc_id → 청크 임베딩 매핑으로 합침. 반환: (embs_by_doc, fam_by_doc).
 # embs_by_doc[doc_id] = 그 문서 청크 임베딩 리스트(순서 보존).
-def _encode_sets_by_doc(model, set_names, is_query, artifacts_dir, prepared_dir, model_name, batch_size):
+def _encode_sets_by_doc(get_model, set_names, is_query, artifacts_dir, prepared_dir, model_name, batch_size):
     embs_by_doc: dict[object, list] = {}
     fam_by_doc: dict[object, object] = {}
     for s in set_names:
-        meta, embs = _encode_set(model, s, is_query, artifacts_dir, prepared_dir, model_name, batch_size)
+        meta, embs = _encode_set(get_model, s, is_query, artifacts_dir, prepared_dir, model_name, batch_size)
         for i, r in enumerate(meta.itertuples(index=False)):
             embs_by_doc.setdefault(r.doc_id, []).append((r.chunk_id, embs[i]))
             fam_by_doc[r.doc_id] = r.family_id
@@ -125,10 +129,19 @@ def colbert_votes(reference_docs_df, query_docs_df, set_names, prepared_dir="dat
                   model_name=DEFAULT_MODEL, shortlist_k=32, retrieve_k=1, artifacts_dir="artifacts",
                   batch_size=32):
     import torch
-    from pylate import indexes, models, retrieve
+    from pylate import indexes, retrieve
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = models.ColBERT(model_name_or_path=model_name, query_length=QUERY_LEN, document_length=DOC_LEN)
+
+    # 모델은 캐시 미스로 실제 인코딩할 때만 로드(1회) — 전 set 캐시면 모델·GPU 안 씀. PLAID/retrieve 는 모델 불필요.
+    _box: dict = {}
+
+    def get_model():
+        if "m" not in _box:
+            from pylate import models
+            _box["m"] = models.ColBERT(model_name_or_path=model_name,
+                                       query_length=QUERY_LEN, document_length=DOC_LEN)
+        return _box["m"]
 
     ref_ids = set(reference_docs_df["doc_id"])
     q_ids = set(query_docs_df["doc_id"])
@@ -140,7 +153,7 @@ def colbert_votes(reference_docs_df, query_docs_df, set_names, prepared_dir="dat
 
     # ---- ref: set 단위 인코딩(캐시) → 청크를 PLAID 등록 (=build, 추론 latency 제외) ----
     t0 = perf_counter()
-    ref_by_doc, ref_fam = _encode_sets_by_doc(model, set_names, False, artifacts_dir, prepared_dir,
+    ref_by_doc, ref_fam = _encode_sets_by_doc(get_model, set_names, False, artifacts_dir, prepared_dir,
                                               model_name, batch_size)
     ref_by_doc = {d: v for d, v in ref_by_doc.items() if d in ref_ids}     # 기밀 절반만
     ref_cids, ref_cembs, ref_chunk_to_doc = _flatten_chunks(ref_by_doc)
@@ -152,7 +165,7 @@ def colbert_votes(reference_docs_df, query_docs_df, set_names, prepared_dir="dat
 
     # ---- query: set 단위 인코딩(캐시) → retrieve(후보) → MaxSim (=inference) ----
     t1 = perf_counter()
-    q_by_doc, _ = _encode_sets_by_doc(model, set_names, True, artifacts_dir, prepared_dir,
+    q_by_doc, _ = _encode_sets_by_doc(get_model, set_names, True, artifacts_dir, prepared_dir,
                                       model_name, batch_size)
     q_by_doc = {d: v for d, v in q_by_doc.items() if d in q_ids}           # positive+benign 만
     q_cids, q_cembs, q_chunk_to_qdoc = _flatten_chunks(q_by_doc)
