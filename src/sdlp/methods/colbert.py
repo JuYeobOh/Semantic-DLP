@@ -35,12 +35,23 @@ QUERY_TOKENS = 90    # query-side (< query_len 96)
 
 
 # query bag ↔ ref bag MaxSim mean. Q,D: torch [Ntok,128] (L2정규화 → 내적=cosine).
-def _maxsim_mean(Q, D) -> float:
+# 긴 문서는 [Qtok,Rtok] 전체 행렬이 폭발(OOM) → query·ref 토큰을 블록으로 나눠 running max (결과 동일).
+def _maxsim_mean(Q, D, qblock=4096, dblock=4096) -> float:
     import torch
 
+    nq = int(Q.shape[0])
+    if nq == 0 or int(D.shape[0]) == 0:
+        return 0.0
     with torch.no_grad():
-        sim = Q @ D.T                               # [Qtok, Rtok]
-        return float(sim.max(dim=1).values.sum().item() / max(int(Q.shape[0]), 1))
+        total = 0.0
+        for qi in range(0, nq, qblock):
+            Qb = Q[qi:qi + qblock]
+            run = None   # 이 query 블록의 각 토큰이 본 ref 최대 내적
+            for di in range(0, int(D.shape[0]), dblock):
+                m = (Qb @ D[di:di + dblock].T).max(dim=1).values   # [qb]
+                run = m if run is None else torch.maximum(run, m)
+            total += float(run.sum().item())
+        return total / nq
 
 
 # retrieve 결과(쿼리 청크별 top-k ref 청크) → 쿼리 문서별 후보 ref 문서 상위 shortlist.
