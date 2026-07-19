@@ -32,6 +32,7 @@ DOC_LEN = 512
 # 토큰 단위 청킹(모델 tokenizer) — 특수토큰([CLS]/[Q|D]/[SEP]) 여유 두고 모델 최대까지 채움.
 REF_TOKENS = 500     # doc-side (< doc_len 512)
 QUERY_TOKENS = 90    # query-side (< query_len 96)
+ENC_BLOCK = 512      # 인코딩 시 이 청크 수마다 GPU→CPU 로 내림 (대규모 set GPU 누적 OOM 방지)
 
 
 # query bag ↔ ref bag MaxSim mean. Q,D: torch [Ntok,128] (L2정규화 → 내적=cosine).
@@ -89,16 +90,24 @@ def _encode_set(get_model, set_name, is_query, artifacts_dir, prepared_dir, mode
         embs = [flat[r.start:r.end] for r in meta.itertuples(index=False)]
         return meta, embs
 
+    import torch
+
     from sdlp.io import load_prepared_set
     docs_df = load_prepared_set(prepared_dir, set_name)
     model = get_model()   # 캐시 미스일 때만 모델 로드 (토큰 청킹에 tokenizer 필요)
     chunks_df = build_chunks_df(docs_df, ChunkSpec(mode="token", size=n_tok, overlap=0),
                                 tokenizer=model.tokenizer).reset_index(drop=True)
     texts = chunks_df["chunk_text"].astype(str).tolist()
-    raw = model.encode(texts, is_query=is_query, convert_to_tensor=True,
-                       batch_size=batch_size, show_progress_bar=True)
-    embs = ([raw[i].cpu().numpy().astype(np.float16) for i in range(len(texts))]
-            if not isinstance(raw, list) else [e.cpu().numpy().astype(np.float16) for e in raw])
+    # 청크를 블록으로 나눠 인코딩 후 **즉시 CPU 로 내림** — convert_to_tensor 가 전 청크를 GPU 에
+    # 쌓아 대규모 set(casimir 10만+ 청크)에서 OOM 나는 것 방지. (블록당만 GPU 점유)
+    embs: list = []
+    for i in range(0, len(texts), ENC_BLOCK):
+        raw = model.encode(texts[i:i + ENC_BLOCK], is_query=is_query, convert_to_tensor=True,
+                           batch_size=batch_size, show_progress_bar=False)
+        raw = [raw[j] for j in range(len(raw))] if not isinstance(raw, list) else raw
+        embs.extend(e.cpu().numpy().astype(np.float16) for e in raw)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     starts, cur = [], 0
     for e in embs:
