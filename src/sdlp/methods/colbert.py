@@ -85,10 +85,8 @@ def _encode_set(get_model, set_name, is_query, artifacts_dir, prepared_dir, mode
     cache_dir = Path(artifacts_dir) / "cache" / "embeddings_colbert" / model_slug(model_name) / slug / set_name
     meta_p, tok_p = cache_dir / "meta.parquet", cache_dir / "tokens.npy"
     if meta_p.exists() and tok_p.exists():
-        meta = pd.read_parquet(meta_p)
-        flat = np.load(tok_p)
-        embs = [flat[r.start:r.end] for r in meta.itertuples(index=False)]
-        return meta, embs
+        # memmap 으로 열어 RAM 에 안 올림 — 필요한 문서 청크만 나중에 복사(대규모 set OOM 방지).
+        return pd.read_parquet(meta_p), np.load(tok_p, mmap_mode="r")
 
     import torch
 
@@ -118,18 +116,24 @@ def _encode_set(get_model, set_name, is_query, artifacts_dir, prepared_dir, mode
     cache_dir.mkdir(parents=True, exist_ok=True)
     np.save(tok_p, np.concatenate(embs, axis=0) if embs else np.zeros((0, 0), np.float16))
     meta.to_parquet(meta_p, index=False)
-    return meta, embs
+    del embs   # 저장했으니 RAM 해제 → memmap 으로 재오픈
+    return meta, np.load(tok_p, mmap_mode="r")
 
 
 # 여러 set 을 인코딩(캐시)해 doc_id → 청크 임베딩 매핑으로 합침. 반환: (embs_by_doc, fam_by_doc).
-# embs_by_doc[doc_id] = 그 문서 청크 임베딩 리스트(순서 보존).
-def _encode_sets_by_doc(get_model, set_names, is_query, artifacts_dir, prepared_dir, model_name, batch_size):
+# keep_ids 에 있는 문서의 청크만 memmap 에서 RAM 으로 복사한다 — casimir 처럼 set 전체가 수십 GB 일 때
+# 통째로 올리면 RAM OOM(실측 124GB). 필요한 문서만 뽑아 절반 이하로 줄인다.
+def _encode_sets_by_doc(get_model, set_names, is_query, artifacts_dir, prepared_dir, model_name,
+                        batch_size, keep_ids=None):
     embs_by_doc: dict[object, list] = {}
     fam_by_doc: dict[object, object] = {}
     for s in set_names:
-        meta, embs = _encode_set(get_model, s, is_query, artifacts_dir, prepared_dir, model_name, batch_size)
-        for i, r in enumerate(meta.itertuples(index=False)):
-            embs_by_doc.setdefault(r.doc_id, []).append((r.chunk_id, embs[i]))
+        meta, flat = _encode_set(get_model, s, is_query, artifacts_dir, prepared_dir, model_name, batch_size)
+        for r in meta.itertuples(index=False):
+            if keep_ids is not None and r.doc_id not in keep_ids:
+                continue
+            embs_by_doc.setdefault(r.doc_id, []).append(
+                (r.chunk_id, np.asarray(flat[r.start:r.end])))   # 이 청크만 복사
             fam_by_doc[r.doc_id] = r.family_id
     return embs_by_doc, fam_by_doc
 
@@ -174,8 +178,7 @@ def colbert_votes(reference_docs_df, query_docs_df, set_names, prepared_dir="dat
     # ---- ref: set 단위 인코딩(캐시) → 청크를 PLAID 등록 (=build, 추론 latency 제외) ----
     t0 = perf_counter()
     ref_by_doc, ref_fam = _encode_sets_by_doc(get_model, set_names, False, artifacts_dir, prepared_dir,
-                                              model_name, batch_size)
-    ref_by_doc = {d: v for d, v in ref_by_doc.items() if d in ref_ids}     # 기밀 절반만
+                                              model_name, batch_size, keep_ids=ref_ids)   # 기밀 절반만 로드
     ref_cids, ref_cembs, ref_chunk_to_doc = _flatten_chunks(ref_by_doc)
     index = indexes.PLAID(index_folder=str(Path(artifacts_dir) / "colbert_index"),
                           index_name="colbert_ref", override=True, show_progress=False)
@@ -186,8 +189,7 @@ def colbert_votes(reference_docs_df, query_docs_df, set_names, prepared_dir="dat
     # ---- query: set 단위 인코딩(캐시) → retrieve(후보) → MaxSim (=inference) ----
     t1 = perf_counter()
     q_by_doc, _ = _encode_sets_by_doc(get_model, set_names, True, artifacts_dir, prepared_dir,
-                                      model_name, batch_size)
-    q_by_doc = {d: v for d, v in q_by_doc.items() if d in q_ids}           # positive+benign 만
+                                      model_name, batch_size, keep_ids=q_ids)   # positive+benign 만 로드
     q_cids, q_cembs, q_chunk_to_qdoc = _flatten_chunks(q_by_doc)
     retriever = retrieve.ColBERT(index=index)
     results = retriever.retrieve(queries_embeddings=[e.astype(np.float32) for e in q_cembs], k=retrieve_k)
