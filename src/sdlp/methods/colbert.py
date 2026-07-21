@@ -21,6 +21,7 @@ from time import perf_counter
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from sdlp.detection.core import vote_entropy, vote_gini, vote_variance
 from sdlp.embedding.spec import model_slug
@@ -33,6 +34,22 @@ DOC_LEN = 512
 REF_TOKENS = 500     # doc-side (< doc_len 512)
 QUERY_TOKENS = 90    # query-side (< query_len 96)
 ENC_BLOCK = 512      # 인코딩 시 이 청크 수마다 GPU→CPU 로 내림 (대규모 set GPU 누적 OOM 방지)
+QUERY_DOC_BLOCK = 512   # 쿼리 문서 이 개수마다 retrieve+MaxSim 을 끝내고 해제 (RAM 피크 제어)
+
+
+# 진행 단계 + 현재 RSS 를 stdout 에 남긴다. RAM OOM 은 SIGKILL 이라 traceback 이 없어서
+# **마지막 로그 줄**이 어디서 죽었는지 아는 유일한 단서가 된다.
+def _stage(msg: str) -> None:
+    rss = ""
+    try:
+        with open("/proc/self/status") as f:   # Linux 서버 전용, 없으면 조용히 생략
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = f"   RSS={int(line.split()[1]) / 1e6:.1f}GB"
+                    break
+    except OSError:
+        pass
+    print(f"[colbert] {msg}{rss}", flush=True)
 
 
 # query bag ↔ ref bag MaxSim mean. Q,D: torch [Ntok,128] (L2정규화 → 내적=cosine).
@@ -105,7 +122,7 @@ def _encode_set(get_model, set_name, is_query, artifacts_dir, prepared_dir, mode
     block_paths: list = []
     lens: list[int] = []
     dim = 0
-    for i in range(0, len(texts), ENC_BLOCK):
+    for i in tqdm(range(0, len(texts), ENC_BLOCK), desc=f"colbert encode {side}:{set_name}"):
         raw = model.encode(texts[i:i + ENC_BLOCK], is_query=is_query, convert_to_tensor=True,
                            batch_size=batch_size, show_progress_bar=False)
         raw = [raw[j] for j in range(len(raw))] if not isinstance(raw, list) else raw
@@ -142,21 +159,40 @@ def _encode_set(get_model, set_name, is_query, artifacts_dir, prepared_dir, mode
     return meta, np.load(tok_p, mmap_mode="r")
 
 
-# 여러 set 을 인코딩(캐시)해 doc_id → 청크 임베딩 매핑으로 합침. 반환: (embs_by_doc, fam_by_doc).
-# keep_ids 에 있는 문서의 청크만 memmap 에서 RAM 으로 복사한다 — casimir 처럼 set 전체가 수십 GB 일 때
-# 통째로 올리면 RAM OOM(실측 124GB). 필요한 문서만 뽑아 절반 이하로 줄인다.
+# set 들을 순회하며 **문서 batch** 단위로 (embs_by_doc, fam_by_doc) 를 내보낸다.
+# keep_ids 문서의 청크만 memmap 에서 RAM 으로 복사한다 — set 전체(casimir query 70GB)를 통째로
+# 올리면 OOM. 한 문서는 한 set 에만 있으므로 set 경계에서 끊어도 문서가 쪼개지지 않는다.
+# docs_per_batch=None 이면 set 하나를 통으로 (ref 처럼 상주시켜야 하는 쪽).
+def _iter_docs(get_model, set_names, is_query, artifacts_dir, prepared_dir, model_name,
+               batch_size, keep_ids=None, docs_per_batch=None):
+    side = "query" if is_query else "ref"
+    for s in set_names:
+        meta, flat = _encode_set(get_model, s, is_query, artifacts_dir, prepared_dir, model_name, batch_size)
+        _stage(f"{side} set={s}: 청크 {len(meta):,} 로드 시작")
+        cur: dict[object, list] = {}
+        fam: dict[object, object] = {}
+        for r in meta.itertuples(index=False):
+            if keep_ids is not None and r.doc_id not in keep_ids:
+                continue
+            if docs_per_batch and r.doc_id not in cur and len(cur) >= docs_per_batch:
+                yield cur, fam
+                cur, fam = {}, {}
+            cur.setdefault(r.doc_id, []).append(
+                (r.chunk_id, np.asarray(flat[r.start:r.end])))   # 이 청크만 복사
+            fam[r.doc_id] = r.family_id
+        if cur:
+            yield cur, fam
+
+
+# _iter_docs 를 전부 모아 doc_id → 청크 임베딩 매핑으로 (ref 처럼 상주가 필요한 쪽).
 def _encode_sets_by_doc(get_model, set_names, is_query, artifacts_dir, prepared_dir, model_name,
                         batch_size, keep_ids=None):
     embs_by_doc: dict[object, list] = {}
     fam_by_doc: dict[object, object] = {}
-    for s in set_names:
-        meta, flat = _encode_set(get_model, s, is_query, artifacts_dir, prepared_dir, model_name, batch_size)
-        for r in meta.itertuples(index=False):
-            if keep_ids is not None and r.doc_id not in keep_ids:
-                continue
-            embs_by_doc.setdefault(r.doc_id, []).append(
-                (r.chunk_id, np.asarray(flat[r.start:r.end])))   # 이 청크만 복사
-            fam_by_doc[r.doc_id] = r.family_id
+    for e, f in _iter_docs(get_model, set_names, is_query, artifacts_dir, prepared_dir,
+                           model_name, batch_size, keep_ids=keep_ids):
+        embs_by_doc.update(e)
+        fam_by_doc.update(f)
     return embs_by_doc, fam_by_doc
 
 
@@ -199,56 +235,67 @@ def colbert_votes(reference_docs_df, query_docs_df, set_names, prepared_dir="dat
 
     # ---- ref: set 단위 인코딩(캐시) → 청크를 PLAID 등록 (=build, 추론 latency 제외) ----
     t0 = perf_counter()
+    _stage(f"ref 로드 시작 (기밀 {len(ref_ids):,} 문서)")
     ref_by_doc, ref_fam = _encode_sets_by_doc(get_model, set_names, False, artifacts_dir, prepared_dir,
                                               model_name, batch_size, keep_ids=ref_ids)   # 기밀 절반만 로드
     ref_cids, ref_cembs, ref_chunk_to_doc = _flatten_chunks(ref_by_doc)
+    _stage(f"PLAID 등록 시작 (ref 청크 {len(ref_cids):,})")
     index = indexes.PLAID(index_folder=str(Path(artifacts_dir) / "colbert_index"),
                           index_name="colbert_ref", override=True, show_progress=False)
     index.add_documents(documents_ids=ref_cids,
                         documents_embeddings=[e.astype(np.float32) for e in ref_cembs])
+    del ref_cembs, ref_cids   # fp32 사본 즉시 해제
     build_sec = perf_counter() - t0
+    _stage(f"PLAID 등록 완료 ({build_sec:.0f}s)")
 
-    # ---- query: set 단위 인코딩(캐시) → retrieve(후보) → MaxSim (=inference) ----
+    # ---- query: 문서 batch 단위로 로드 → retrieve(후보) → MaxSim → 해제 (=inference) ----
+    # 전체를 한 번에 올리면 fp16 52GB + retrieve 용 fp32 사본 105GB 로 RAM OOM(SIGKILL). batch 로 스트리밍.
     t1 = perf_counter()
-    q_by_doc, _ = _encode_sets_by_doc(get_model, set_names, True, artifacts_dir, prepared_dir,
-                                      model_name, batch_size, keep_ids=q_ids)   # positive+benign 만 로드
-    q_cids, q_cembs, q_chunk_to_qdoc = _flatten_chunks(q_by_doc)
     retriever = retrieve.ColBERT(index=index)
-    results = retriever.retrieve(queries_embeddings=[e.astype(np.float32) for e in q_cembs], k=retrieve_k)
-    cand_by_qdoc = _candidate_docs(results, [q_chunk_to_qdoc[c] for c in q_cids],
-                                   ref_chunk_to_doc, shortlist_k)
-
     rows = []
-    for qd, q_items in q_by_doc.items():
-        Q = _bag(q_items)
-        family_scores: dict[object, float] = {}
-        family_best_doc: dict[object, object] = {}
-        for rd in cand_by_qdoc.get(qd, []):
-            if rd not in ref_by_doc:
-                continue
-            s = _maxsim_mean(Q, _bag(ref_by_doc[rd]))
-            fid = ref_fam.get(rd)
-            if fid not in family_scores or s > family_scores[fid]:
-                family_scores[fid] = s
-                family_best_doc[fid] = rd
-        del Q
-        if family_scores:
-            pred_fam = max(family_scores, key=lambda f: (family_scores[f], str(f)))
-            best = family_scores[pred_fam]
-            pred_doc = family_best_doc[pred_fam]
-            matched = 1
-        else:
-            pred_fam, pred_doc, best, matched = None, None, 0.0, 0
-        dist = np.array(list(family_scores.values()), dtype=float)
-        rows.append({
-            "query_doc_id": qd, "query_family_id": q_fam_of.get(qd, ""),
-            "pred_doc_id": pred_doc, "pred_family_id": pred_fam,
-            "n_chunks": len(q_items), "n_votes": matched, "best_votes": matched,
-            "confidence": float(best),   # MaxSim mean (best-F1 sweep 로 평가)
-            "vote_entropy": vote_entropy(dist), "vote_variance": vote_variance(dist), "vote_gini": vote_gini(dist),
-            "vote_distribution_json": json.dumps(
-                {str(k2): round(float(v), 4) for k2, v in family_scores.items()}, ensure_ascii=False),
-        })
+    done = 0
+    for q_batch, _fam in _iter_docs(get_model, set_names, True, artifacts_dir, prepared_dir, model_name,
+                                    batch_size, keep_ids=q_ids, docs_per_batch=QUERY_DOC_BLOCK):
+        q_cids, q_cembs, q_chunk_to_qdoc = _flatten_chunks(q_batch)
+        results = retriever.retrieve(queries_embeddings=[e.astype(np.float32) for e in q_cembs], k=retrieve_k)
+        cand_by_qdoc = _candidate_docs(results, [q_chunk_to_qdoc[c] for c in q_cids],
+                                       ref_chunk_to_doc, shortlist_k)
+        del q_cembs, results
+
+        for qd, q_items in q_batch.items():
+            Q = _bag(q_items)
+            family_scores: dict[object, float] = {}
+            family_best_doc: dict[object, object] = {}
+            for rd in cand_by_qdoc.get(qd, []):
+                if rd not in ref_by_doc:
+                    continue
+                s = _maxsim_mean(Q, _bag(ref_by_doc[rd]))
+                fid = ref_fam.get(rd)
+                if fid not in family_scores or s > family_scores[fid]:
+                    family_scores[fid] = s
+                    family_best_doc[fid] = rd
+            del Q
+            if family_scores:
+                pred_fam = max(family_scores, key=lambda f: (family_scores[f], str(f)))
+                best = family_scores[pred_fam]
+                pred_doc = family_best_doc[pred_fam]
+                matched = 1
+            else:
+                pred_fam, pred_doc, best, matched = None, None, 0.0, 0
+            dist = np.array(list(family_scores.values()), dtype=float)
+            rows.append({
+                "query_doc_id": qd, "query_family_id": q_fam_of.get(qd, ""),
+                "pred_doc_id": pred_doc, "pred_family_id": pred_fam,
+                "n_chunks": len(q_items), "n_votes": matched, "best_votes": matched,
+                "confidence": float(best),   # MaxSim mean (best-F1 sweep 로 평가)
+                "vote_entropy": vote_entropy(dist), "vote_variance": vote_variance(dist),
+                "vote_gini": vote_gini(dist),
+                "vote_distribution_json": json.dumps(
+                    {str(k2): round(float(v), 4) for k2, v in family_scores.items()}, ensure_ascii=False),
+            })
+        done += len(q_batch)
+        _stage(f"query {done:,}/{len(q_ids):,} 문서 채점 ({perf_counter() - t1:.0f}s)")
+        del q_batch
     inference_sec = perf_counter() - t1
     timing = {"inference_total_sec": inference_sec, "build_sec": build_sec, "shortlist_k": shortlist_k}
     return pd.DataFrame(rows, columns=VOTES_COLUMNS), timing
