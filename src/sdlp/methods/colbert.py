@@ -96,27 +96,49 @@ def _encode_set(get_model, set_name, is_query, artifacts_dir, prepared_dir, mode
     chunks_df = build_chunks_df(docs_df, ChunkSpec(mode="token", size=n_tok, overlap=0),
                                 tokenizer=model.tokenizer).reset_index(drop=True)
     texts = chunks_df["chunk_text"].astype(str).tolist()
-    # 청크를 블록으로 나눠 인코딩 후 **즉시 CPU 로 내림** — convert_to_tensor 가 전 청크를 GPU 에
-    # 쌓아 대규모 set(casimir 10만+ 청크)에서 OOM 나는 것 방지. (블록당만 GPU 점유)
-    embs: list = []
+    # 블록 단위 인코딩 → GPU 에서 바로 CPU 로 내리고 **블록마다 임시파일로 저장**한 뒤,
+    # 최종 memmap 에 이어붙인다. 전체를 리스트로 들고 concatenate 하면 대규모 set(35GB)에서
+    # 리스트+복사본 = 피크 70GB 로 RAM OOM. 이 방식은 RAM 피크가 블록 하나뿐.
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = cache_dir / "_blocks"
+    tmp_dir.mkdir(exist_ok=True)
+    block_paths: list = []
+    lens: list[int] = []
+    dim = 0
     for i in range(0, len(texts), ENC_BLOCK):
         raw = model.encode(texts[i:i + ENC_BLOCK], is_query=is_query, convert_to_tensor=True,
                            batch_size=batch_size, show_progress_bar=False)
         raw = [raw[j] for j in range(len(raw))] if not isinstance(raw, list) else raw
-        embs.extend(e.cpu().numpy().astype(np.float16) for e in raw)
+        arrs = [e.cpu().numpy().astype(np.float16) for e in raw]
+        lens.extend(int(a.shape[0]) for a in arrs)
+        blk = np.concatenate(arrs, axis=0)
+        dim = int(blk.shape[1])
+        p = tmp_dir / f"{len(block_paths):06d}.npy"
+        np.save(p, blk)
+        block_paths.append(p)
+        del arrs, blk, raw
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    starts, cur = [], 0
-    for e in embs:
-        starts.append(cur); cur += e.shape[0]
+    # 블록들을 최종 memmap 으로 이어붙임 (RAM 은 블록 하나만 점유)
+    total = int(sum(lens))
+    out = np.lib.format.open_memmap(tok_p, mode="w+", dtype=np.float16, shape=(total, dim or 128))
+    pos = 0
+    for p in block_paths:
+        b = np.load(p, mmap_mode="r")
+        out[pos:pos + b.shape[0]] = b
+        pos += int(b.shape[0])
+        del b
+        p.unlink()
+    out.flush()
+    del out
+    tmp_dir.rmdir()
+
+    ends = np.cumsum(lens, dtype=np.int64) if lens else np.zeros(0, np.int64)
     meta = chunks_df[["chunk_id", "doc_id", "family_id"]].copy()
-    meta["start"] = starts
-    meta["end"] = [s + e.shape[0] for s, e in zip(starts, embs)]
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    np.save(tok_p, np.concatenate(embs, axis=0) if embs else np.zeros((0, 0), np.float16))
+    meta["start"] = (ends - np.asarray(lens, dtype=np.int64)) if lens else []
+    meta["end"] = ends if lens else []
     meta.to_parquet(meta_p, index=False)
-    del embs   # 저장했으니 RAM 해제 → memmap 으로 재오픈
     return meta, np.load(tok_p, mmap_mode="r")
 
 
